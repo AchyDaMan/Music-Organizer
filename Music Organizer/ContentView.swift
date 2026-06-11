@@ -17,7 +17,8 @@ struct ContentView: View {
     @State private var sourceFolder: URL?
     @State private var outputFolder: URL?
 
-    @State private var activePicker: PickerType? = nil
+    @State private var pickerToShow: PickerType? = nil
+    @State private var isFolderPickerPresented = false
 
     @State private var statusMessage = "Choose a source folder."
     
@@ -28,7 +29,7 @@ struct ContentView: View {
             filename: "song1.mp3",
             title: "Test Track One",
             artist: "Test Artist",
-            subgenre: "Afro House",
+            genreTag: "Afro House",
             releaseYear: "2022"
         ),
         TrackFile(
@@ -36,7 +37,7 @@ struct ContentView: View {
             filename: "song2.flac",
             title: "Test Track Two",
             artist: "Another Artist",
-            subgenre: "Hardgroove",
+            genreTag: "Hardgroove",
             releaseYear: "2023"
         ),
         TrackFile(
@@ -44,55 +45,65 @@ struct ContentView: View {
             filename: "song3.wav",
             title: "Test Track Three",
             artist: "Third Artist",
-            subgenre: "Liquid DnB",
+            genreTag: "Liquid DnB",
             releaseYear: "2021"
         )
     ]
 
-    @State private var mappings: [String: String] = [
-        "Afro House": "",
-        "Hardgroove": "",
-        "Liquid DnB": ""
+    @State private var mappings: [String: GenreBucketRule] = [
+        "Afro House": GenreBucketRule(
+            parentGenre: "House",
+            subgenreFolder: "Afro House"
+        ),
+        "House": GenreBucketRule(
+            parentGenre: "House",
+            subgenreFolder: "General House"
+        ),
+        "Liquid DnB": GenreBucketRule(
+            parentGenre: "Drum & Bass",
+            subgenreFolder: "Liquid DnB"
+        )
     ]
 
-    private var detectedSubgenres: [String] {
-        Array(Set(tracks.map { $0.subgenre })).sorted()
+    private var detectedGenreTags: [String] {
+        Array(Set(tracks.map { $0.genreTag })).sorted()
     }
-
+    
     var body: some View {
         NavigationSplitView {
-            subgenreMappingPanel
+            mappingPanel
         } detail: {
             previewTable
         }
         .fileImporter(
-            isPresented: Binding(
-                get: { activePicker != nil },
-                set: { if !$0 { activePicker = nil } }
-            ),
+            isPresented: $isFolderPickerPresented,
             allowedContentTypes: [.folder],
             allowsMultipleSelection: false
         ) { result in
             switch result {
             case .success(let urls):
-                if let picker = activePicker {
+                if let picker = pickerToShow {
                     switch picker {
                     case .source:
                         sourceFolder = urls.first
+                        print("Selected source: \(sourceFolder?.path ?? "nil")")
                     case .output:
                         outputFolder = urls.first
+                        print("Selected output: \(outputFolder?.path ?? "nil")")
                     }
                 }
             case .failure(let error):
                 print(error.localizedDescription)
             }
-            activePicker = nil
+            // reset state
+            pickerToShow = nil
+            isFolderPickerPresented = false
         }
         .navigationTitle("Music Organizer")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 VStack(spacing: 2) {
-                    Button(action: { activePicker = .source }) {
+                    Button(action: { pickerToShow = .source; isFolderPickerPresented = true }) {
                         Label("Source", systemImage: "folder")
                     }
                     .help(sourceFolder?.path ?? "Select Source Folder")
@@ -106,7 +117,7 @@ struct ContentView: View {
                     }
                 }
                 VStack(spacing: 2) {
-                    Button(action: { activePicker = .output }) {
+                    Button(action: { pickerToShow = .output; isFolderPickerPresented = true }) {
                         Label("Output", systemImage: "externaldrive")
                     }
                     .help(outputFolder?.path ?? "Select Output Folder")
@@ -119,36 +130,79 @@ struct ContentView: View {
                             .frame(maxWidth: 100)
                     }
                 }
+                VStack(spacing: 2) {
+                    Button(action: scan) {
+                        Label("Scan", systemImage: "wand.and.stars")
+                    }
+                    .help("Scan source folder for tracks")
+                    .disabled(sourceFolder == nil)
+                }
+                VStack(spacing: 2) {
+                    Button(action: { tracks.removeAll() }) {
+                        Label("Clear", systemImage: "trash")
+                    }
+                    .help("Clear all scanned tracks")
+                    .disabled(tracks.isEmpty)
+                }
             }
         }
     }
 
-    private var subgenreMappingPanel: some View {
+    private var mappingPanel: some View {
         VStack(alignment: .leading) {
-            Text("Subgenre → Genre")
+            Text("Genre Tag → Folder Rule")
                 .font(.title2)
                 .bold()
                 .padding([.top, .horizontal])
 
-            List(detectedSubgenres, id: \.self) { subgenre in
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(subgenre)
+            List(detectedGenreTags, id: \.self) { genreTag in
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Tag: \(genreTag)")
                         .font(.headline)
 
                     TextField(
-                        "Parent genre, e.g. House, Techno",
+                        "Parent genre, e.g. House, Techno, Drum & Bass",
                         text: Binding(
                             get: {
-                                mappings[subgenre, default: ""]
+                                mappings[genreTag]?.parentGenre ?? ""
                             },
-                            set: {
-                                mappings[subgenre] = $0
+                            set: { newValue in
+                                let current = mappings[genreTag] ?? GenreBucketRule(
+                                    parentGenre: "",
+                                    subgenreFolder: genreTag
+                                )
+
+                                mappings[genreTag] = GenreBucketRule(
+                                    parentGenre: newValue,
+                                    subgenreFolder: current.subgenreFolder
+                                )
+                            }
+                        )
+                    )
+                    .textFieldStyle(.roundedBorder)
+
+                    TextField(
+                        "Subgenre folder, e.g. Afro House, General House",
+                        text: Binding(
+                            get: {
+                                mappings[genreTag]?.subgenreFolder ?? genreTag
+                            },
+                            set: { newValue in
+                                let current = mappings[genreTag] ?? GenreBucketRule(
+                                    parentGenre: "",
+                                    subgenreFolder: genreTag
+                                )
+
+                                mappings[genreTag] = GenreBucketRule(
+                                    parentGenre: current.parentGenre,
+                                    subgenreFolder: newValue
+                                )
                             }
                         )
                     )
                     .textFieldStyle(.roundedBorder)
                 }
-                .padding(.vertical, 3)
+                .padding(.vertical, 6)
             }
         }
     }
@@ -160,33 +214,90 @@ struct ContentView: View {
                 .bold()
                 .padding([.top, .horizontal])
 
-            Table(tracks) {
-                TableColumn("File") { track in
-                    Text(track.filename)
+            if tracks.isEmpty {
+                VStack(spacing: 8) {
+                    Text("No tracks yet")
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                    Text("Choose a Source folder and press Scan.")
+                        .font(.subheadline)
+                        .foregroundStyle(.tertiary)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                Table(tracks) {
+                    TableColumn("File") { track in
+                        Text(track.filename)
+                    }
 
-                TableColumn("Subgenre") { track in
-                    Text(track.subgenre)
-                }
+                    TableColumn("Raw Genre Tag") { track in
+                        Text(track.genreTag)
+                    }
 
-                TableColumn("Genre") { track in
-                    let genre = mappings[track.subgenre, default: ""]
-                    Text(genre.isEmpty ? "Unmapped" : genre)
-                        .foregroundStyle(genre.isEmpty ? .red : .primary)
-                }
+                    TableColumn("Parent Genre") { track in
+                        let rule = mappings[track.genreTag]
+                        let parentGenre = rule?.parentGenre ?? ""
 
-                TableColumn("Year") { track in
-                    Text(track.releaseYear)
-                }
+                        Text(parentGenre.isEmpty ? "Unmapped" : parentGenre)
+                            .foregroundStyle(parentGenre.isEmpty ? .red : .primary)
+                    }
 
-                TableColumn("Destination Preview") { track in
-                    let genre = mappings[track.subgenre, default: ""]
-                    let parentGenre = genre.isEmpty ? "Unmapped Genre" : genre
+                    TableColumn("Subgenre Folder") { track in
+                        let rule = mappings[track.genreTag]
+                        let subgenreFolder = rule?.subgenreFolder ?? track.genreTag
 
-                    Text("\(parentGenre)/\(track.subgenre)/\(track.releaseYear)/\(track.filename)")
+                        Text(subgenreFolder)
+                    }
+
+                    TableColumn("Year") { track in
+                        Text(track.releaseYear)
+                    }
+
+                    TableColumn("Destination Preview") { track in
+                        let rule = mappings[track.genreTag]
+
+                        let parentGenre = rule?.parentGenre.isEmpty == false
+                            ? rule!.parentGenre
+                            : "Unmapped Genre"
+
+                        let subgenreFolder = rule?.subgenreFolder.isEmpty == false
+                            ? rule!.subgenreFolder
+                            : track.genreTag
+
+                        Text("\(parentGenre)/\(subgenreFolder)/\(track.releaseYear)/\(track.filename)")
+                    }
                 }
             }
         }
+    }
+    
+    private func scan() {
+        guard let sourceFolder else {
+            print("Scan aborted: no source folder")
+            return
+        }
+
+        print("Scanning folder: \(sourceFolder.path)")
+        let before = tracks.count
+
+        // Handle security-scoped resource access if needed
+        let didAccess = sourceFolder.startAccessingSecurityScopedResource()
+        defer { if didAccess { sourceFolder.stopAccessingSecurityScopedResource() } }
+
+        let scanned = MusicScanner.scan(folder: sourceFolder)
+        print("Scanner returned \(scanned.count) items")
+
+        // Normalize existing and scanned paths for more reliable de-duplication
+        func normalizedPath(_ path: String) -> String {
+            URL(fileURLWithPath: path).standardizedFileURL.path
+        }
+
+        let existingPaths = Set(tracks.map { normalizedPath($0.sourcePath) })
+        let newOnes = scanned.filter { !existingPaths.contains(normalizedPath($0.sourcePath)) }
+        print("New items after de-dup: \(newOnes.count)")
+
+        tracks.append(contentsOf: newOnes)
+        print("Tracks count before \(before) -> after \(tracks.count)")
     }
 }
 
