@@ -12,44 +12,55 @@ struct MusicScanner {
     // Define supported music extensions (mp3 is most common)
     static let supportedExtensions: Set<String> = ["mp3", "wav", "flac"]
     
-    // Actual scanning function to find the music and put it into the trackfile list as seen in contentview
-    static func scan(folder rootURL: URL) -> [TrackFile] {
-        let fileManager = FileManager.default
-        
-        guard let enumerator = fileManager.enumerator(at: rootURL, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles])
-        else {
-            return[]
+    // Actual Scanning function
+    static func scan(folder rootURL: URL) async -> [TrackFile] {
+        let didStartAccessing = rootURL.startAccessingSecurityScopedResource()
+
+        defer {
+            if didStartAccessing {
+                rootURL.stopAccessingSecurityScopedResource()
+            }
         }
-        
-        // Set up the list of tracks
+
+        let audioFileURLs = collectAudioFileURLs(from: rootURL)
+
         var tracks: [TrackFile] = []
-        
-        // For every track it finds
-        for case let fileURL as URL in enumerator {
-            
-            // convert file extension to lowercase (so that .WAV is converted to .wav)
-            let fileExtension = fileURL.pathExtension.lowercased()
-            
-            // Skip if it has a wrong file extension
-            guard supportedExtensions.contains(fileExtension) else { continue }
-            
-            // declare the track before putting it into the list
-            let track = TrackFile(
-                sourcePath: fileURL.path,
-                filename: fileURL.lastPathComponent,
-                title: fileURL.deletingPathExtension().lastPathComponent,
-                // TODO change later
-                artist: "",
-                genreTag: "Unknown Subgenre",
-                releaseYear: "Unknown Year"
-            )
-            
+
+        for fileURL in audioFileURLs {
+            let track = await AudioTagReader.read(url: fileURL)
             tracks.append(track)
         }
-        
-        return tracks.sorted { lhs, rhs in
-            lhs.filename.localizedCaseInsensitiveCompare(rhs.filename) == .orderedAscending
+
+        return tracks.sorted {
+            $0.filename.localizedCaseInsensitiveCompare($1.filename) == .orderedAscending
         }
+    }
+
+    // Gets the audio URLs
+    private static func collectAudioFileURLs(from rootURL: URL) -> [URL] {
+        let fileManager = FileManager.default
+
+        guard let enumerator = fileManager.enumerator(
+            at: rootURL,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        var audioFileURLs: [URL] = []
+
+        for case let fileURL as URL in enumerator {
+            let fileExtension = fileURL.pathExtension.lowercased()
+
+            guard supportedExtensions.contains(fileExtension) else {
+                continue
+            }
+
+            audioFileURLs.append(fileURL)
+        }
+
+        return audioFileURLs
     }
 }
 

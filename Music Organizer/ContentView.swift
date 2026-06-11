@@ -5,65 +5,23 @@
 //  Created by Achintya Yedavalli on 6/10/26.
 //
 import SwiftUI
-import UniformTypeIdentifiers
+import WebKit
 
 struct ContentView: View {
     
-    private enum PickerType {
-        case source, output
-    }
-
     //  Private Variable Declarations
     @State private var sourceFolder: URL?
     @State private var outputFolder: URL?
 
-    @State private var pickerToShow: PickerType? = nil
-    @State private var isFolderPickerPresented = false
-
+    @State private var isScanning = false
+    @State private var isOrganizing = false
+    @State private var lastOrganizeFailures: [OrganizeFailure] = []
     @State private var statusMessage = "Choose a source folder."
     
     // This is dummy data - using it to test if the table showing works
-    @State private var tracks: [TrackFile] = [
-        TrackFile(
-            sourcePath: "/Users/you/Music/Messy/song1.mp3",
-            filename: "song1.mp3",
-            title: "Test Track One",
-            artist: "Test Artist",
-            genreTag: "Afro House",
-            releaseYear: "2022"
-        ),
-        TrackFile(
-            sourcePath: "/Users/you/Music/Messy/song2.flac",
-            filename: "song2.flac",
-            title: "Test Track Two",
-            artist: "Another Artist",
-            genreTag: "Hardgroove",
-            releaseYear: "2023"
-        ),
-        TrackFile(
-            sourcePath: "/Users/you/Music/Messy/song3.wav",
-            filename: "song3.wav",
-            title: "Test Track Three",
-            artist: "Third Artist",
-            genreTag: "Liquid DnB",
-            releaseYear: "2021"
-        )
-    ]
+    @State private var tracks: [TrackFile] = []
 
-    @State private var mappings: [String: GenreBucketRule] = [
-        "Afro House": GenreBucketRule(
-            parentGenre: "House",
-            subgenreFolder: "Afro House"
-        ),
-        "House": GenreBucketRule(
-            parentGenre: "House",
-            subgenreFolder: "General House"
-        ),
-        "Liquid DnB": GenreBucketRule(
-            parentGenre: "Drum & Bass",
-            subgenreFolder: "Liquid DnB"
-        )
-    ]
+    @State private var mappings: [String: GenreBucketRule] = [:]
 
     private var detectedGenreTags: [String] {
         Array(Set(tracks.map { $0.genreTag })).sorted()
@@ -75,35 +33,11 @@ struct ContentView: View {
         } detail: {
             previewTable
         }
-        .fileImporter(
-            isPresented: $isFolderPickerPresented,
-            allowedContentTypes: [.folder],
-            allowsMultipleSelection: false
-        ) { result in
-            switch result {
-            case .success(let urls):
-                if let picker = pickerToShow {
-                    switch picker {
-                    case .source:
-                        sourceFolder = urls.first
-                        print("Selected source: \(sourceFolder?.path ?? "nil")")
-                    case .output:
-                        outputFolder = urls.first
-                        print("Selected output: \(outputFolder?.path ?? "nil")")
-                    }
-                }
-            case .failure(let error):
-                print(error.localizedDescription)
-            }
-            // reset state
-            pickerToShow = nil
-            isFolderPickerPresented = false
-        }
         .navigationTitle("Music Organizer")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 VStack(spacing: 2) {
-                    Button(action: { pickerToShow = .source; isFolderPickerPresented = true }) {
+                    Button(action: chooseSourceFolder) {
                         Label("Source", systemImage: "folder")
                     }
                     .help(sourceFolder?.path ?? "Select Source Folder")
@@ -117,7 +51,7 @@ struct ContentView: View {
                     }
                 }
                 VStack(spacing: 2) {
-                    Button(action: { pickerToShow = .output; isFolderPickerPresented = true }) {
+                    Button(action: chooseOutputFolder) {
                         Label("Output", systemImage: "externaldrive")
                     }
                     .help(outputFolder?.path ?? "Select Output Folder")
@@ -135,7 +69,19 @@ struct ContentView: View {
                         Label("Scan", systemImage: "wand.and.stars")
                     }
                     .help("Scan source folder for tracks")
-                    .disabled(sourceFolder == nil)
+                    .disabled(sourceFolder == nil || isScanning || isOrganizing)
+                }
+                VStack(spacing: 2) {
+                    Button(action: organizeCopy) {
+                        Label(isOrganizing ? "Copying..." : "Copy Clean", systemImage: "square.and.arrow.down.on.square")
+                    }
+                    .help("Copy tracks into the clean output folder structure")
+                    .disabled(
+                        tracks.isEmpty ||
+                        outputFolder == nil ||
+                        isOrganizing ||
+                        isScanning
+                    )
                 }
                 VStack(spacing: 2) {
                     Button(action: { tracks.removeAll() }) {
@@ -254,50 +200,139 @@ struct ContentView: View {
                     }
 
                     TableColumn("Destination Preview") { track in
-                        let rule = mappings[track.genreTag]
-
-                        let parentGenre = rule?.parentGenre.isEmpty == false
-                            ? rule!.parentGenre
-                            : "Unmapped Genre"
-
-                        let subgenreFolder = rule?.subgenreFolder.isEmpty == false
-                            ? rule!.subgenreFolder
-                            : track.genreTag
-
-                        Text("\(parentGenre)/\(subgenreFolder)/\(track.releaseYear)/\(track.filename)")
+                        Text(
+                            FileOrganizer.destinationPreview(
+                                for: track,
+                                mappings: mappings
+                            )
+                        )
                     }
                 }
             }
+            Divider()
+
+            HStack {
+                Text(statusMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                
+                Spacer()
+                
+                if isScanning {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                }
+                
+                if isOrganizing {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                }
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 8)
         }
+    }
+    
+    private func chooseSourceFolder() {
+        if let folder = chooseFolder(title: "Choose Source Music Folder") {
+            sourceFolder = folder
+            statusMessage = "Selected source folder: \(folder.lastPathComponent)"
+            print("Selected source: \(folder.path)")
+        }
+    }
+
+    private func chooseOutputFolder() {
+        if let folder = chooseFolder(title: "Choose Output Folder") {
+            outputFolder = folder
+            statusMessage = "Selected output folder: \(folder.lastPathComponent)"
+            print("Selected output: \(folder.path)")
+        }
+    }
+
+    private func chooseFolder(title: String) -> URL? {
+        let panel = NSOpenPanel()
+        panel.title = title
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+
+        let response = panel.runModal()
+
+        guard response == .OK else {
+            return nil
+        }
+
+        return panel.url
     }
     
     private func scan() {
         guard let sourceFolder else {
-            print("Scan aborted: no source folder")
+            statusMessage = "Choose a source folder first."
             return
         }
 
-        print("Scanning folder: \(sourceFolder.path)")
-        let before = tracks.count
+        statusMessage = "Scanning..."
+        isScanning = true
+        lastOrganizeFailures = []
 
-        // Handle security-scoped resource access if needed
-        let didAccess = sourceFolder.startAccessingSecurityScopedResource()
-        defer { if didAccess { sourceFolder.stopAccessingSecurityScopedResource() } }
+        Task {
+            let scannedTracks = await MusicScanner.scan(folder: sourceFolder)
 
-        let scanned = MusicScanner.scan(folder: sourceFolder)
-        print("Scanner returned \(scanned.count) items")
+            await MainActor.run {
+                self.tracks = scannedTracks
 
-        // Normalize existing and scanned paths for more reliable de-duplication
-        func normalizedPath(_ path: String) -> String {
-            URL(fileURLWithPath: path).standardizedFileURL.path
+                for tag in Set(scannedTracks.map { $0.genreTag }) {
+                    if self.mappings[tag] == nil {
+                        self.mappings[tag] = GenreBucketRule(
+                            parentGenre: "",
+                            subgenreFolder: tag == "Unknown Genre Tag" ? "Unknown Subgenre" : tag
+                        )
+                    }
+                }
+
+                self.isScanning = false
+                self.statusMessage = "Found \(scannedTracks.count) audio files."
+            }
         }
-
-        let existingPaths = Set(tracks.map { normalizedPath($0.sourcePath) })
-        let newOnes = scanned.filter { !existingPaths.contains(normalizedPath($0.sourcePath)) }
-        print("New items after de-dup: \(newOnes.count)")
-
-        tracks.append(contentsOf: newOnes)
-        print("Tracks count before \(before) -> after \(tracks.count)")
+    }
+    
+    // to organize the copy procedure for output
+    private func organizeCopy() {
+        guard let outputFolder else {
+            statusMessage = "Choose an output folder first."
+            return
+        }
+        
+        guard !tracks.isEmpty else {
+            statusMessage = "Scan tracks before copying."
+            return
+        }
+        
+        isOrganizing = true
+        statusMessage = "Copying files..."
+        lastOrganizeFailures = []
+        
+        Task {
+            let summary = FileOrganizer.organize(
+                tracks: tracks,
+                sourceRoot: sourceFolder,
+                outputRoot: outputFolder,
+                mappings: mappings,
+                mode: .copy
+            )
+            
+            await MainActor.run {
+                self.isOrganizing = false
+                self.lastOrganizeFailures = summary.failures
+                
+                if summary.failedFiles == 0 {
+                    self.statusMessage = "Copied \(summary.successfulFiles) files successfully."
+                } else {
+                    self.statusMessage = "Copied \(summary.successfulFiles) files. Failed \(summary.failedFiles)."
+                }
+            }
+        }
     }
 }
 
