@@ -57,6 +57,13 @@ OutputFolder/Electronic/Drum and Bass/2019/track.mp3
 
 ---
 
+## Installation
+1. Download the latest release from GitHub.
+2. Run the .pkg and follow its instructions
+3. Run the application (Default: Applications folder)
+
+---
+
 ## Building from Source
 
 1. Clone the repository
